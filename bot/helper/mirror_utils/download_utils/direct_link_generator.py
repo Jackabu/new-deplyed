@@ -24,14 +24,12 @@ from bot.helper.telegram_helper.bot_commands import BotCommands
 from bot.helper.ext_utils.bot_utils import is_gdtot_link
 from bot.helper.ext_utils.exceptions import DirectDownloadLinkException
 
-fmed_list = ['fembed.net', 'fembed.com', 'femax20.com', 'fcdn.stream', 'feurl.com', 'layarkacaxxi.icu',
-             'naniplay.nanime.in', 'naniplay.nanime.biz', 'naniplay.com', 'mm9842.com']
+drive_list = ['driveapp.in', 'gdflix.pro', 'drivelinks.in', 'drivesharer.in', 'driveflix.in', 'drivebit.in', 'drivehub.in', 'driveace.in']
 
-
-def direct_link_generator(link: str):
-    """ direct links generator """
-    if 'youtube.com' in link or 'youtu.be' in link:
-        raise DirectDownloadLinkException(f"ERROR: Use /{BotCommands.WatchCommand} to mirror Youtube link\nUse /{BotCommands.ZipWatchCommand} to make zip of Youtube playlist")
+def url_link_generate(text_url: str):
+    ### Direct Links Generator ++++
+    if not text_url:
+        raise DirectDownloadLinkException("`No Links Found!, Try Again` !!")
     elif 'zippyshare.com' in text_url:
         return zippy_share(text_url)
     elif 'yadi.sk' in text_url:
@@ -526,6 +524,56 @@ def krakenfiles(page_link: str) -> str:
         raise DirectDownloadLinkException(
             f"Failed to acquire download URL from kraken for : {page_link}")
 
+
+def gdtot(url: str) -> str:
+    """ Gdtot google drive link generator
+    By https://github.com/majnurangeela/BypassBot/blob/main/gdtot.py """
+
+    if CRYPT is None:
+        raise DirectDownloadLinkException("ERROR: CRYPT variable not provided")
+
+    client = requests.Session()
+    client.cookies.update({ 'crypt': CRYPT })
+    res = client.get(url)
+    title = re.findall(r">(.*?)<\/h5>", res.text)[0]
+    info = re.findall(r'<td\salign="right">(.*?)<\/td>', res.text)
+    info = {
+        'error': True,
+        'message': 'Link Invalid.',
+        'title': title,
+        'size': info[0],
+        'date': info[1]
+    }
+    new_gdtot = requests.get("https://new.gdtot.org/").url
+
+    info['src_url'] = url
+    res = client.get(f"{new_gdtot}dld?id={url.split('/')[-1]}")
+    try:
+        url = re.findall('URL=(.*?)"', res.text)[0]
+        print(url)
+    except:
+        info['message'] = 'The requested URL could not be retrieved.',
+        return info
+
+    params = parse_qs(urlparse(url).query)
+
+    if 'msgx' in params:
+        info['message'] = params['msgx'][0]
+    if 'gd' not in params or not params['gd'] or params['gd'][0] == 'false':
+        return info
+
+    try:
+        decoded_id = base64.b64decode(str(params['gd'][0])).decode('utf-8')
+        gdrive_url = f'https://drive.google.com/open?id={decoded_id}'
+        info['message'] = 'Success.'
+    except:
+        info['error'] = True
+        return info
+
+    info['gdrive_link'] = gdrive_url
+    return info
+
+
 def gplink(url):
 
     check = re.findall(r'\bhttps?://.*gplink\S+', url)
@@ -554,6 +602,85 @@ def gplink(url):
     res = scraper.post(final_url, data=data, headers=h).json()
 
     return res
+
+def appdrive_dl(url: str, is_direct) -> str:
+    """ AppDrive link generator
+    By https://github.com/xcscxr , More Clean Look by https://github.com/DragonPower84 """
+
+    if EMAIL is None or PWSSD is None:
+        raise DirectDownloadLinkException("Appdrive Cred Is Not Given")
+    account = {'email': EMAIL, 'passwd': PWSSD}
+    client = requests.Session()
+    client.headers.update({
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Safari/537.36"
+    })
+    data = {
+        'email': account['email'],
+        'password': account['passwd']
+    }
+    client.post(f'https://{urlparse(url).netloc}/login', data=data)
+    data = {
+        'root_drive': '',
+        'folder': GDRIVE_FOLDER_ID
+    }
+    client.post(f'https://{urlparse(url).netloc}/account', data=data)
+    res = client.get(url)
+    key = re.findall(r'"key",\s+"(.*?)"', res.text)[0]
+    ddl_btn = etree.HTML(res.content).xpath("//button[@id='drc']")
+    info = re.findall(r'>(.*?)<\/li>', res.text)
+    info_parsed = {}
+    for item in info:
+        kv = [s.strip() for s in item.split(':', maxsplit = 1)]
+        info_parsed[kv[0].lower()] = kv[1] 
+    info_parsed = info_parsed
+    info_parsed['error'] = False
+    info_parsed['link_type'] = 'login' # direct/login
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={'-'*4}_",
+    }
+    data = {
+        'type': 1,
+        'key': key,
+        'action': 'original'
+    }
+    if len(ddl_btn):
+        info_parsed['link_type'] = 'direct'
+        data['action'] = 'direct'
+    while data['type'] <= 3:
+        boundary=f'{"-"*6}_'
+        data_string = ''
+        for item in data:
+             data_string += f'{boundary}\r\n'
+             data_string += f'Content-Disposition: form-data; name="{item}"\r\n\r\n{data[item]}\r\n'
+        data_string += f'{boundary}--\r\n'
+        gen_payload = data_string
+        try:
+            response = client.post(url, data=gen_payload, headers=headers).json()
+            break
+        except: data['type'] += 1
+    if 'url' in response:
+        info_parsed['gdrive_link'] = response['url']
+    elif 'error' in response and response['error']:
+        info_parsed['error'] = True
+        info_parsed['error_message'] = response['message']
+    else:
+        info_parsed['error'] = True
+        info_parsed['error_message'] = 'Something went wrong :('
+    if info_parsed['error']: return info_parsed
+    if urlparse(url).netloc == 'driveapp.in' and not info_parsed['error']:
+        res = client.get(info_parsed['gdrive_link'])
+        drive_link = etree.HTML(res.content).xpath("//a[contains(@class,'btn')]/@href")[0]
+        info_parsed['gdrive_link'] = drive_link
+    if urlparse(url).netloc == 'drivesharer.in' and not info_parsed['error']:
+        res = client.get(info_parsed['gdrive_link'])
+        drive_link = etree.HTML(res.content).xpath("//a[contains(@class,'btn btn-primary')]/@href")[0]
+        info_parsed['gdrive_link'] = drive_link
+    if urlparse(url).netloc == 'drivebit.in' and not info_parsed['error']:
+        res = client.get(info_parsed['gdrive_link'])
+        drive_link = etree.HTML(res.content).xpath("//a[contains(@class,'btn btn-primary')]/@href")[0]
+        info_parsed['gdrive_link'] = drive_link
+    info_parsed['src_url'] = url
+    return info_parsed
 
 
 def linkvertise(url: str):
@@ -1191,46 +1318,3 @@ def gadrive_dl(url):
     info_parsed['src_url'] = url
 
     return info_parsed
-
-def appdrive(url: str) -> str:
-    client = rsession()
-    client.headers.update({
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Safari/537.36"
-    })
-    account_login(client, url, account['email'], account['passwd'])
-    res = client.get(url)
-    key = re_findall(r'"key",\s+"(.*?)"', res.text)[0]
-    ddl_btn = etree.HTML(res.content).xpath("//button[@id='drc']")
-    info_parsed = parse_info(res.text)
-    info_parsed['error'] = False
-    info_parsed['link_type'] = 'login'  # direct/login
-    headers = {
-        "Content-Type": f"multipart/form-data; boundary={'-'*4}_",
-    }
-    data = {
-        'type': 1,
-        'key': key,
-        'action': 'original'
-    }
-    if len(ddl_btn):
-        info_parsed['link_type'] = 'direct'
-        data['action'] = 'direct'
-    while data['type'] <= 3:
-        try:
-            response = client.post(url, data=gen_payload(data), headers=headers).json()
-            break
-        except: data['type'] += 1
-    if 'url' in response:
-        info_parsed['gdrive_link'] = response['url']
-    elif 'error' in response and response['error']:
-        info_parsed['error'] = True
-        info_parsed['error_message'] = response['message']
-    if urlparse(url).netloc == 'driveapp.in' and not info_parsed['error']:
-        res = client.get(info_parsed['gdrive_link'])
-        drive_link = etree.HTML(res.content).xpath("//a[contains(@class,'btn')]/@href")[0]
-        info_parsed['gdrive_link'] = drive_link
-    if not info_parsed['error']:
-        return info_parsed
-    else:
-        raise DirectDownloadLinkException(f"{info_parsed['error_message']}")
-        
